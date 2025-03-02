@@ -14,7 +14,6 @@ const categoryButtons = document.querySelectorAll('.category-btn');
 const completionPercentage = document.getElementById('completion-percentage');
 const completionBar = document.getElementById('completion-bar');
 const completedCount = document.getElementById('completed-count');
-const pendingCount = document.getElementById('pending-count');
 const totalCount = document.getElementById('total-count');
 const todaysDateElement = document.getElementById('todays-date');
 const editModal = document.getElementById('edit-modal');
@@ -39,15 +38,10 @@ const editReflectionButton = document.getElementById('edit-reflection');
 
 // App State
 let tasks = JSON.parse(localStorage.getItem('tasks')) || [];
-let currentFilter = 'all';
+let currentFilter = 'today'; // Default to today's tasks
 let currentCategory = 'all';
 let categoryChartInstance = null;
 let weeklyChartInstance = null;
-let timerInterval = null;
-let timerRunning = false;
-let seconds = 0;
-let minutes = 0;
-let hours = 0;
 
 // Category Icons
 const categoryIcons = {
@@ -63,6 +57,13 @@ const priorityColors = {
     high: '#ef4444',
     medium: '#f59e0b',
     low: '#10b981'
+};
+
+// Priority Icons
+const priorityIcons = {
+    high: '🔴',
+    medium: '🟡',
+    low: '🟢'
 };
 
 // Initialize the app
@@ -253,7 +254,7 @@ function addTask(e) {
         priority: taskPriority,
         completed: false,
         createdAt: new Date().toISOString(),
-        deadline: taskDeadline,
+        deadline: taskDeadline ? taskDeadline.toISOString() : null,
         completedAt: null
     };
     
@@ -310,9 +311,13 @@ function getFilteredTasks() {
             tomorrow.setDate(tomorrow.getDate() + 1);
             
             return filtered.filter(task => {
-                if (!task.deadline) return false;
-                const deadline = new Date(task.deadline);
-                return deadline >= today && deadline < tomorrow;
+                if (task.deadline) {
+                    const deadline = new Date(task.deadline);
+                    return deadline >= today && deadline < tomorrow;
+                }
+                // Include tasks without deadlines created today
+                const createdAt = new Date(task.createdAt);
+                return createdAt >= today && createdAt < tomorrow;
             });
             
         case 'upcoming':
@@ -333,8 +338,7 @@ function getFilteredTasks() {
 // Create a task element
 function createTaskElement(task) {
     const taskItem = document.createElement('div');
-    taskItem.classList.add('task-item', 'p-4', 'bg-white', 'rounded-lg', 'shadow-sm', 'border', 'border-gray-100');
-    taskItem.classList.add(`priority-${task.priority}`);
+    taskItem.classList.add('task-item', `priority-${task.priority}`);
     
     if (task.completed) {
         taskItem.classList.add('task-completed');
@@ -342,7 +346,6 @@ function createTaskElement(task) {
     
     // Determine deadline status
     let deadlineHTML = '';
-    let deadlineStatus = '';
     
     if (task.deadline) {
         const now = new Date();
@@ -354,14 +357,12 @@ function createTaskElement(task) {
         const formattedDeadline = deadline.toLocaleDateString('en-US', options);
         
         if (timeRemaining < 0 && !task.completed) {
-            deadlineStatus = 'deadline-overdue';
-            deadlineHTML = `<div class="deadline-indicator ${deadlineStatus}">
-                <i class="fas fa-exclamation-circle"></i> Overdue: ${formattedDeadline}
+            deadlineHTML = `<div class="deadline-indicator deadline-overdue">
+                <i class="fas fa-exclamation-circle"></i> Due: ${formattedDeadline}
             </div>`;
         } else if (timeRemaining < 24 * 60 * 60 * 1000 && !task.completed) { // Less than 24 hours
-            deadlineStatus = 'deadline-approaching';
-            deadlineHTML = `<div class="deadline-indicator ${deadlineStatus}">
-                <i class="fas fa-clock"></i> Due soon: ${formattedDeadline}
+            deadlineHTML = `<div class="deadline-indicator deadline-approaching">
+                <i class="fas fa-clock"></i> Due: ${formattedDeadline}
             </div>`;
         } else {
             deadlineHTML = `<div class="deadline-indicator text-gray-500">
@@ -373,6 +374,9 @@ function createTaskElement(task) {
     // Get category icon
     const categoryIcon = categoryIcons[task.category] || '<i class="fas fa-tasks"></i>';
     
+    // Get priority icon
+    const priorityIcon = priorityIcons[task.priority];
+    
     // Get category color
     const categoryColorClass = `category-${task.category}`;
     
@@ -381,30 +385,25 @@ function createTaskElement(task) {
     const titleClass = task.completed ? 'line-through text-gray-400' : '';
     
     taskItem.innerHTML = `
-        <div class="flex justify-between items-start">
-            <div class="flex-1">
+        <div class="flex justify-between items-start w-full">
+            <div class="flex-1 pr-4">
                 <div class="flex items-center mb-1">
                     <span class="category-indicator ${categoryColorClass}"></span>
-                    <span class="text-xs text-gray-500 font-medium mr-2">${categoryIcon} ${task.category.charAt(0).toUpperCase() + task.category.slice(1)}</span>
+                    <span class="text-xs text-gray-500 font-medium">${categoryIcon} ${task.category.charAt(0).toUpperCase() + task.category.slice(1)}</span>
+                    <span class="ml-2 text-xs" style="color: ${priorityColors[task.priority]};">${priorityIcon} ${task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}</span>
                 </div>
                 <h3 class="task-title text-lg font-medium ${titleClass}">${task.name}</h3>
-                <p class="task-description text-gray-600 text-sm mb-2">${task.description || 'No description'}</p>
+                ${task.description ? `<p class="task-description text-gray-600 text-sm mb-2">${task.description}</p>` : ''}
                 ${deadlineHTML}
-                <div class="flex items-center mt-2 text-xs text-gray-500">
-                    <span class="capitalize mr-3">
-                        <i class="fas fa-flag" style="color: ${priorityColors[task.priority]};"></i> 
-                        ${task.priority} priority
-                    </span>
-                </div>
             </div>
             <div class="task-actions flex space-x-2">
-                <button class="complete-btn p-2 rounded-full ${completeButtonClass}" data-id="${task.id}">
+                <button class="complete-btn p-2 rounded-full ${completeButtonClass}" data-id="${task.id}" aria-label="${task.completed ? 'Mark as incomplete' : 'Mark as complete'}">
                     <i class="fas ${completeIconClass}"></i>
                 </button>
-                <button class="edit-btn p-2 rounded-full bg-blue-100 text-blue-600" data-id="${task.id}">
+                <button class="edit-btn p-2 rounded-full bg-blue-100 text-blue-600" data-id="${task.id}" aria-label="Edit task">
                     <i class="fas fa-edit"></i>
                 </button>
-                <button class="delete-btn p-2 rounded-full bg-red-100 text-red-600" data-id="${task.id}">
+                <button class="delete-btn p-2 rounded-full bg-red-100 text-red-600" data-id="${task.id}" aria-label="Delete task">
                     <i class="fas fa-trash"></i>
                 </button>
             </div>
@@ -431,7 +430,7 @@ function toggleTaskComplete(taskId) {
         
         // Set or clear completedAt timestamp
         if (tasks[taskIndex].completed) {
-            tasks[taskIndex].completedAt = new Date();
+            tasks[taskIndex].completedAt = new Date().toISOString();
             
             // Add animation class to the task element
             const taskElement = document.querySelector(`.task-item .complete-btn[data-id="${taskId}"]`).closest('.task-item');
@@ -523,7 +522,7 @@ function saveEditedTask(e) {
     tasks[taskIndex].description = taskDescription;
     tasks[taskIndex].category = taskCategory;
     tasks[taskIndex].priority = taskPriority;
-    tasks[taskIndex].deadline = taskDeadline;
+    tasks[taskIndex].deadline = taskDeadline ? taskDeadline.toISOString() : null;
     
     saveTasks();
     closeEditModal();
@@ -573,9 +572,13 @@ function updateStats() {
     tomorrow.setDate(tomorrow.getDate() + 1);
     
     const todaysTasks = tasks.filter(task => {
-        if (!task.deadline) return false;
-        const deadline = new Date(task.deadline);
-        return deadline >= today && deadline < tomorrow;
+        if (task.deadline) {
+            const deadline = new Date(task.deadline);
+            return deadline >= today && deadline < tomorrow;
+        }
+        // Include tasks without deadlines created today
+        const createdAt = new Date(task.createdAt);
+        return createdAt >= today && createdAt < tomorrow;
     });
     
     const completedTodaysTasks = todaysTasks.filter(task => task.completed);
@@ -589,7 +592,6 @@ function updateStats() {
     completionPercentage.textContent = `${completionRate}%`;
     completionBar.style.width = `${completionRate}%`;
     completedCount.textContent = completedTodaysTasks.length;
-    pendingCount.textContent = todaysTasks.length - completedTodaysTasks.length;
     totalCount.textContent = todaysTasks.length;
 }
 
@@ -622,15 +624,6 @@ function initCharts() {
                         }
                     }
                 },
-                title: {
-                    display: true,
-                    text: 'Tasks by Category',
-                    font: {
-                        family: "'SF Pro Display', sans-serif",
-                        size: 16,
-                        weight: 'medium'
-                    }
-                },
                 tooltip: {
                     backgroundColor: 'rgba(0, 0, 0, 0.7)',
                     padding: 12,
@@ -655,14 +648,14 @@ function initCharts() {
         data: {
             labels: weeklyData.labels,
             datasets: [{
-                label: 'Completed Tasks',
+                label: 'Completed',
                 data: weeklyData.completed,
                 backgroundColor: '#10b981',
                 borderColor: '#10b981',
                 borderWidth: 0,
                 borderRadius: 6
             }, {
-                label: 'Total Tasks',
+                label: 'Total',
                 data: weeklyData.total,
                 backgroundColor: '#e5e7eb',
                 borderColor: '#e5e7eb',
@@ -708,15 +701,6 @@ function initCharts() {
                             family: "'SF Pro Display', sans-serif",
                             size: 12
                         }
-                    }
-                },
-                title: {
-                    display: true,
-                    text: 'Weekly Task Completion',
-                    font: {
-                        family: "'SF Pro Display', sans-serif",
-                        size: 16,
-                        weight: 'medium'
                     }
                 },
                 tooltip: {
@@ -801,9 +785,13 @@ function getWeeklyData() {
         
         // Count tasks for this day
         const dayTasks = tasks.filter(task => {
-            if (!task.deadline) return false;
-            const deadline = new Date(task.deadline);
-            return deadline >= date && deadline < nextDay;
+            if (task.deadline) {
+                const deadline = new Date(task.deadline);
+                return deadline >= date && deadline < nextDay;
+            }
+            // Include tasks without deadlines created on this day
+            const createdAt = new Date(task.createdAt);
+            return createdAt >= date && createdAt < nextDay;
         });
         
         const dayCompleted = dayTasks.filter(task => task.completed).length;
@@ -817,15 +805,6 @@ function getWeeklyData() {
     }
     
     return { labels: days, completed, total };
-}
-
-// Helper function to format date for display
-function formatDateTime(date) {
-    return date.toLocaleDateString('en-US', { 
-        year: 'numeric',
-        month: 'long', 
-        day: 'numeric'
-    });
 }
 
 // Helper function to format date for datetime-local input
